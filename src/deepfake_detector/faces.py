@@ -109,7 +109,13 @@ class FaceExtractor:
         # from the full-resolution frame.
         scale = min(1.0, self.detect_max_side / max(frame.shape[:2]))
         small = frame if scale == 1.0 else cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        faces = [f for f in self.detector.detect_faces(small) if f.get("confidence", 0) >= self.min_confidence]
+        try:
+            detected = self.detector.detect_faces(small)
+        except ValueError:
+            # mtcnn 1.0 on Keras 3 raises when its last stage receives zero candidate boxes,
+            # which simply means there is no face in this frame.
+            return None
+        faces = [f for f in detected if f.get("confidence", 0) >= self.min_confidence]
         if not faces:
             return None
         best = max(faces, key=lambda f: f["box"][2] * f["box"][3])

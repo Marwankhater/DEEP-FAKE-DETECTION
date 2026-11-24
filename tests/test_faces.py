@@ -66,3 +66,12 @@ def test_detection_on_a_downscaled_copy_maps_back_to_full_resolution():
     assert seen["shape"][:2] == (540, 960)
     assert face.shape == (64, 64, 3)
     assert face.mean() > 150
+
+
+def test_a_detector_error_on_an_empty_frame_counts_as_no_face():
+    class EmptyBatchError:
+        def detect_faces(self, image):
+            raise ValueError("The convolution operation resulted in an empty output")
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    assert FaceExtractor(detector=EmptyBatchError()).largest_face(frame) is None

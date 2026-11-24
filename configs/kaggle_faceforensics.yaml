@@ -1,0 +1,34 @@
+# Train on FaceForensics++ (c23, official splits) and test on DFDC, which the model never sees.
+# Used by notebooks/03_faceforensics_on_kaggle.ipynb. The notebook fills in the DFDC folder.
+
+data:
+  faces_dir: /kaggle/working/faces_ff
+  frames_per_video: 8
+  face_margin: 0.25
+  min_face_confidence: 0.90
+  image_size: 224
+  detect_max_side: 640
+  sources:
+    - type: faceforensics
+      root: /kaggle/input
+      splits_dir: configs/faceforensics_splits
+      methods: [Deepfakes, Face2Face, FaceSwap, NeuralTextures, FaceShifter]
+    - type: dfdc
+      dirs: [/kaggle/working/train_sample_videos]
+      role: cross_test
+
+split:
+  seed: 42
+
+train:
+  batch_size: 32
+  epochs_head: 2
+  epochs_finetune: 10
+  lr_head: 0.001
+  lr_finetune: 0.0001
+  unfreeze_from: block6a_expand_conv
+  dropout: 0.3
+  weights: imagenet
+  patience: 3
+
+run_dir: /kaggle/working/runs/ff_efficientnet_b0

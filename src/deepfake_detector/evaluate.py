@@ -18,13 +18,14 @@ import pandas as pd
 
 from .config import Config, load_config
 from .dataset import load_index, make_dataset
-from .metrics import best_threshold, score, video_scores
+from .metrics import best_threshold, by_method, score, video_scores
 
 
 def predict_frames(model: keras.Model, frames: pd.DataFrame, image_size: int, batch_size: int) -> pd.DataFrame:
     ds = make_dataset(frames, image_size, batch_size, training=False)
     probs = model.predict(ds, verbose=0).ravel()
-    out = frames[["video", "frame", "label"]].copy()
+    cols = [c for c in ("video", "frame", "label", "method", "dataset") if c in frames.columns]
+    out = frames[cols].copy()
     out["prob"] = probs
     return out
 
@@ -35,9 +36,10 @@ def evaluate(config: Config, model: keras.Model | None = None) -> dict:
     model = model or keras.models.load_model(run_dir / "model.keras")
     index = load_index(d.faces_dir)
 
+    splits = [s for s in ("val", "test", "cross") if (index["split"] == s).any()]
     preds = {
         split: predict_frames(model, index[index["split"] == split], d.image_size, t.batch_size)
-        for split in ("val", "test")
+        for split in splits
     }
     videos = {split: video_scores(frames) for split, frames in preds.items()}
     threshold = best_threshold(videos["val"]["label"], videos["val"]["prob"])
@@ -48,7 +50,13 @@ def evaluate(config: Config, model: keras.Model | None = None) -> dict:
         "test_videos": score(test_videos["label"], test_videos["prob"]),
         "test_videos_tuned": score(test_videos["label"], test_videos["prob"], threshold),
         "val_videos": score(videos["val"]["label"], videos["val"]["prob"]),
+        "test_by_method": by_method(test_videos),
     }
+    if "cross" in videos:
+        cross_frames, cross_videos = preds["cross"], videos["cross"]
+        results["cross_frames"] = score(cross_frames["label"], cross_frames["prob"])
+        results["cross_videos"] = score(cross_videos["label"], cross_videos["prob"])
+        cross_videos.to_csv(run_dir / "cross_videos.csv", index=False)
 
     (run_dir / "metrics.json").write_text(json.dumps(results, indent=2))
     test_videos.to_csv(run_dir / "test_videos.csv", index=False)
@@ -73,6 +81,17 @@ def report(results: dict) -> str:
             f"| {name} | {r['count']} | {r['auc']:.3f} | {r['log_loss']:.3f} | {r['balanced_accuracy']:.3f} "
             f"| {r['precision_fake']:.3f} | {r['recall_fake']:.3f} | {r['f1_fake']:.3f} |"
         )
+    if len(results.get("test_by_method", {})) > 1:
+        lines += ["", "Test videos by manipulation method (all real test videos against that method's fakes):", "",
+                  "| Method | Real | Fake | AUC | Balanced acc. (0.5) |", "|---|---:|---:|---:|---:|"]
+        for m, r in results["test_by_method"].items():
+            lines.append(f"| {m} | {r['real']} | {r['fake']} | {r['auc']:.3f} | {r['balanced_accuracy']:.3f} |")
+    if "cross_videos" in results:
+        lines += ["", "Cross-dataset: a dataset the model never trained on:", "",
+                  "| | Items | Real | Fake | AUC | Balanced acc. (0.5) |", "|---|---:|---:|---:|---:|---:|"]
+        for name, key in (("Per frame", "cross_frames"), ("Per video", "cross_videos")):
+            r = results[key]
+            lines.append(f"| {name} | {r['count']} | {r['real']} | {r['fake']} | {r['auc']:.3f} | {r['balanced_accuracy']:.3f} |")
     c = results["test_videos_tuned"]["confusion"]
     lines += [
         "",

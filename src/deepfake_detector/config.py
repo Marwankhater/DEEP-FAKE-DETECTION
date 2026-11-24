@@ -15,6 +15,9 @@ class DataConfig:
     face_margin: float = 0.25
     min_face_confidence: float = 0.90
     image_size: int = 224
+    detect_max_side: int = 960
+    # Optional list of datasets; see metadata.load_sources. When empty, videos_dirs is used.
+    sources: list[dict] = field(default_factory=list)
 
 
 @dataclass

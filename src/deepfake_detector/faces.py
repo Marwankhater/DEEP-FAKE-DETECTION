@@ -9,7 +9,7 @@ import numpy as np
 
 
 class Detector(Protocol):
-    def detect_faces(self, image: np.ndarray) -> list[dict]: ...
+    def detect_faces(self, image): ...
 
 
 def sample_frame_indices(n_frames: int, k: int) -> list[int]:
@@ -22,26 +22,35 @@ def sample_frame_indices(n_frames: int, k: int) -> list[int]:
     return [int(step * i + step / 2) for i in range(k)]
 
 
-def read_frames(path: str, indices: list[int]) -> list[tuple[int, np.ndarray]]:
+def read_frames(path: str, indices: list[int], seek_gap: int = 40) -> list[tuple[int, np.ndarray]]:
     """Decode only the wanted frames, in order, as RGB arrays.
 
-    Reading straight through and grabbing frames is faster and more reliable on DFDC files
-    than seeking with CAP_PROP_POS_FRAMES.
+    Short gaps are walked with grab(), which is cheap. Long gaps jump with CAP_PROP_POS_FRAMES,
+    so a 500-frame clip does not have to be decoded in full to get 8 frames from it. If a jump
+    fails to land, the rest is read straight through.
     """
-    wanted = set(indices)
     frames: list[tuple[int, np.ndarray]] = []
+    if not indices:
+        return frames
     cap = cv2.VideoCapture(path)
     try:
-        last = max(indices) if indices else -1
-        i = 0
-        while i <= last:
-            if not cap.grab():
-                break
-            if i in wanted:
-                ok, frame = cap.retrieve()
-                if ok:
-                    frames.append((i, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
-            i += 1
+        pos = 0
+        for target in sorted(set(indices)):
+            if target - pos > seek_gap:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+                if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) == target:
+                    pos = target
+                else:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+            while pos < target:
+                if not cap.grab():
+                    return frames
+                pos += 1
+            ok, frame = cap.read()
+            pos += 1
+            if not ok:
+                return frames
+            frames.append((target, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
     finally:
         cap.release()
     return frames
@@ -74,6 +83,9 @@ class FaceExtractor:
 
     DFDC clips sometimes show two people, and only one may be manipulated. Taking the largest
     face is a simple rule that matches how most clips are framed; it is a known limitation.
+
+    All frames of a clip go to the detector in one batch, which on a GPU is several times
+    faster than one call per frame.
     """
 
     def __init__(
@@ -84,11 +96,13 @@ class FaceExtractor:
         detect_max_side: int = 960,
         detector: Detector | None = None,
         detector_factory: Callable[[], Detector] | None = None,
+        batch: bool = True,
     ):
         self.margin = margin
         self.size = size
         self.min_confidence = min_confidence
         self.detect_max_side = detect_max_side
+        self.batch = batch
         self._detector = detector
         self._factory = detector_factory
 
@@ -103,19 +117,27 @@ class FaceExtractor:
                 self._detector = MTCNN()
         return self._detector
 
-    def largest_face(self, frame: np.ndarray) -> np.ndarray | None:
-        # DFDC frames are 1080p. MTCNN finds faces just as well at half that size and runs
-        # about four times faster, so detection runs on a smaller copy and the crop is taken
-        # from the full-resolution frame.
-        scale = min(1.0, self.detect_max_side / max(frame.shape[:2]))
-        small = frame if scale == 1.0 else cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    def _scale(self, frame: np.ndarray) -> float:
+        # DFDC frames are 1080p. MTCNN finds faces just as well on a smaller copy and runs much
+        # faster, so detection runs on the copy and the crop comes from the full frame.
+        return min(1.0, self.detect_max_side / max(frame.shape[:2]))
+
+    @staticmethod
+    def _shrink(frame: np.ndarray, scale: float) -> np.ndarray:
+        if scale == 1.0:
+            return frame
+        return cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+    def _detect(self, images):
         try:
-            detected = self.detector.detect_faces(small)
+            return self.detector.detect_faces(images)
         except ValueError:
             # mtcnn 1.0 on Keras 3 raises when its last stage receives zero candidate boxes,
             # which simply means there is no face in this frame.
             return None
-        faces = [f for f in detected if f.get("confidence", 0) >= self.min_confidence]
+
+    def _crop_best(self, frame: np.ndarray, detected, scale: float) -> np.ndarray | None:
+        faces = [f for f in (detected or []) if f.get("confidence", 0) >= self.min_confidence]
         if not faces:
             return None
         best = max(faces, key=lambda f: f["box"][2] * f["box"][3])
@@ -124,12 +146,32 @@ class FaceExtractor:
             return None
         return crop_face(frame, (int(max(0, x)), int(max(0, y)), int(w), int(h)), self.margin, self.size)
 
+    def largest_face(self, frame: np.ndarray) -> np.ndarray | None:
+        scale = self._scale(frame)
+        return self._crop_best(frame, self._detect(self._shrink(frame, scale)), scale)
+
+    def _one_by_one(self, frames):
+        crops = ((i, self.largest_face(f)) for i, f in frames)
+        return [(i, c) for i, c in crops if c is not None]
+
+    def from_frames(self, frames: list[tuple[int, np.ndarray]]) -> list[tuple[int, np.ndarray]]:
+        """Face crops for already decoded frames. Frames without a face are skipped."""
+        if not frames:
+            return []
+        if not self.batch or len({f.shape for _, f in frames}) != 1:
+            return self._one_by_one(frames)
+        scale = self._scale(frames[0][1])
+        detected = self._detect([self._shrink(f, scale) for _, f in frames])
+        if detected is None or len(detected) != len(frames) or (detected and isinstance(detected[0], dict)):
+            # A batch can fail on one bad frame; fall back to one call per frame.
+            return self._one_by_one(frames)
+        out = []
+        for (i, frame), found in zip(frames, detected):
+            crop = self._crop_best(frame, found, scale)
+            if crop is not None:
+                out.append((i, crop))
+        return out
+
     def from_video(self, path: str, k: int) -> list[tuple[int, np.ndarray]]:
         """Face crops from `k` evenly spaced frames. Frames without a face are skipped."""
-        indices = sample_frame_indices(frame_count(path), k)
-        crops = []
-        for i, frame in read_frames(path, indices):
-            face = self.largest_face(frame)
-            if face is not None:
-                crops.append((i, face))
-        return crops
+        return self.from_frames(read_frames(path, sample_frame_indices(frame_count(path), k)))

@@ -22,9 +22,10 @@ def video_scores(frames: pd.DataFrame) -> pd.DataFrame:
     Expects columns video, label and prob. The mean is a deliberately plain rule; it is
     robust to a few bad crops and easy to explain.
     """
+    extra = {c: (c, "first") for c in ("method", "dataset") if c in frames.columns}
     return (
         frames.groupby("video")
-        .agg(label=("label", "first"), prob=("prob", "mean"), faces=("prob", "size"))
+        .agg(label=("label", "first"), prob=("prob", "mean"), faces=("prob", "size"), **extra)
         .reset_index()
     )
 
@@ -60,3 +61,15 @@ def best_threshold(labels, probs) -> float:
         return 0.5
     results = [(balanced_accuracy_score(y, (p >= t).astype(int)), t) for t in candidates]
     return float(max(results)[1])
+
+
+def by_method(videos: pd.DataFrame) -> dict[str, dict]:
+    """Score each manipulation method on its own: all real videos against that method's fakes."""
+    if "method" not in videos.columns:
+        return {}
+    real = videos[videos["label"] == 0]
+    out = {}
+    for method in sorted(videos.loc[videos["label"] == 1, "method"].unique()):
+        part = pd.concat([real, videos[(videos["label"] == 1) & (videos["method"] == method)]])
+        out[method] = score(part["label"], part["prob"])
+    return out

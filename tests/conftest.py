@@ -15,6 +15,8 @@ class CentreDetector:
         self.confidence = confidence
 
     def detect_faces(self, image):
+        if isinstance(image, list):
+            return [self.detect_faces(i) for i in image]
         h, w = image.shape[:2]
         return [{"box": [w // 4, h // 4, w // 2, h // 2], "confidence": self.confidence}]
 

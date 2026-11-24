@@ -6,9 +6,9 @@ each one with MTCNN, scores every face with an EfficientNet-B0 fine-tuned on the
 for the video.
 
 This started as my graduation project at the Egyptian Russian University (Faculty of
-Artificial Intelligence, 2024), graded Excellent. Version 2 is a rewrite of that project: the
-first version was a single Colab notebook, trained a small CNN from scratch and had no proper
-test split. The notebook from the original exploration is kept in `notebooks/01_explore_dfdc.ipynb`.
+Artificial Intelligence, 2024), graded Excellent. The graduation version
+used a CNN with fine-tuning in one Colab notebook. Version 2 rewrites it as a tested package
+with a test split grouped by source video, so no clip leaks between training and testing. The notebook from the original exploration is kept in `notebooks/01_explore_dfdc.ipynb`.
 
 ## Results
 

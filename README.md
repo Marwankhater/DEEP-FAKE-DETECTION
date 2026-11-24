@@ -12,10 +12,23 @@ test split. The notebook from the original exploration is kept in `notebooks/01_
 
 ## Results
 
-<!-- Filled from runs/efficientnet_b0/report.md after the Kaggle run. -->
-Results on the held-out test videos will be added here from the Kaggle run
-(`notebooks/02_train_on_kaggle.ipynb`): AUC, log loss, balanced accuracy and the confusion
-matrix, at frame level and at video level.
+Held-out test set: 61 videos (976 face crops) from source videos the model never saw in training.
+Full numbers, plots and the training log are in [`reports/`](reports/README.md).
+
+| Test set | AUC | Balanced accuracy | F1 (fake) |
+|---|---:|---:|---:|
+| Per frame | 0.939 | 0.871 | 0.928 |
+| Per video (mean of its frames) | **0.967** | **0.900** | 0.951 |
+
+<img src="reports/roc.png" alt="ROC curve on the test videos, AUC 0.967" width="360">
+
+Averaging over a clip's frames lifts the result from 0.939 to 0.967 AUC: single frames are
+noisy, a whole clip much less so.
+
+Read these numbers with the test set's size in mind. It is the 400-clip DFDC sample, and the test
+split holds only 8 real videos, so one wrong real clip moves balanced accuracy by about six points.
+The threshold picked on the validation videos (0.28) did slightly worse on the test videos than
+the default 0.5, which is reported as it came out. A larger check needs more of DFDC's 470 GB.
 
 ## How it works
 

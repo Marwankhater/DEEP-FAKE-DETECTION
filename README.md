@@ -1,140 +1,126 @@
-# 🕵️ Deepfake Detection System
+# Deepfake Video Detection
 
-A deep learning system that detects manipulated images and videos using **MTCNN** for face detection and **CNN models** built with TensorFlow/Keras — achieving high precision in identifying deepfake content.
+Detects face-swap deepfakes in short videos. It samples frames from a clip, finds the face in
+each one with MTCNN, scores every face with an EfficientNet-B0 fine-tuned on the
+[DFDC](https://ai.meta.com/datasets/dfdc/) dataset, and averages the scores into one verdict
+for the video.
 
----
+This started as my graduation project at the Egyptian Russian University (Faculty of
+Artificial Intelligence, 2024), graded Excellent. Version 2 is a rewrite of that project: the
+first version was a single Colab notebook, trained a small CNN from scratch and had no proper
+test split. The notebook from the original exploration is kept in `notebooks/01_explore_dfdc.ipynb`.
 
-## 📌 Overview
+## Results
 
-With the rapid rise of AI-generated media, detecting deepfakes has become a critical challenge. This project tackles the problem end-to-end — from face extraction to classification — using a robust deep learning pipeline trained and validated to distinguish real from manipulated content.
+<!-- Filled from runs/efficientnet_b0/report.md after the Kaggle run. -->
+Results on the held-out test videos will be added here from the Kaggle run
+(`notebooks/02_train_on_kaggle.ipynb`): AUC, log loss, balanced accuracy and the confusion
+matrix, at frame level and at video level.
 
----
-
-## ✨ Features
-
-- 🎯 **Precise Face Detection** — MTCNN extracts faces accurately from images and video frames
-- 🧠 **CNN-Based Classification** — Custom-trained model classifies real vs. deepfake content
-- 🔄 **Data Augmentation** — Expands training diversity to improve generalization
-- ⚙️ **Optimized Pipeline** — Full preprocessing, training, validation, and testing workflow
-- 📈 **High Precision Results** — Achieved strong detection accuracy on test data
-
----
-
-## 🛠️ Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Language | Python |
-| Face Detection | MTCNN |
-| Deep Learning | TensorFlow / Keras |
-| Data Processing | NumPy, OpenCV |
-| Visualization | Matplotlib |
-
----
-
-## 📁 Project Structure
+## How it works
 
 ```
-deepfake-detection/
-│
-├── data/
-│   ├── real/                  # Real face samples
-│   └── fake/                  # Deepfake face samples
-│
-├── src/
-│   ├── face_extractor.py      # MTCNN face detection & cropping
-│   ├── preprocessing.py       # Augmentation & normalization
-│   ├── model.py               # CNN architecture definition
-│   ├── train.py               # Training & validation loop
-│   └── predict.py             # Inference on new inputs
-│
-├── models/
-│   └── deepfake_detector.h5   # Saved trained model
-│
-├── notebooks/
-│   └── analysis.ipynb         # EDA & results visualization
-│
-├── requirements.txt
-└── README.md
+video ──► 16 evenly spaced frames ──► MTCNN: largest face per frame ──► 224×224 crop
+                                                                            │
+verdict ◄── mean of the face scores ◄── EfficientNet-B0 + dense head (P(fake) per face)
 ```
 
----
+**Faces, not frames.** Manipulation in DFDC happens on the face, and the rest of the frame is
+noise for the model. Crops keep 25% extra margin around the detected box, because blending
+artefacts tend to sit on the edge of the swapped face.
 
-## 🚀 Getting Started
+**Splitting by source video.** Every fake in DFDC is made from a real clip and shows the same
+person in the same room. A random split puts a real clip in training and its fakes in the test
+set, and the model can then score well by recognising people and backgrounds. Here a real video
+and all the fakes made from it always land in the same split (`metadata.split_by_group`). This
+makes the numbers lower and honest.
 
-### Prerequisites
-```bash
-Python 3.8+
-pip
-```
+**Transfer learning in two stages.** The head is trained first on frozen ImageNet features. Then
+the backbone from `block6a` onward is unfrozen and trained with a learning rate ten times lower.
+Batch-norm layers stay frozen throughout, since batches of 32 faces are too small to keep their
+statistics stable.
 
-### Installation
+**Imbalance.** DFDC has about five fakes for every real clip. Training uses inverse-frequency
+class weights, and the reported metrics are AUC and balanced accuracy, which a model that
+answers "fake" every time cannot game.
+
+**Threshold.** The decision threshold is picked on the validation videos and then applied,
+unchanged, to the test videos. Both the 0.5 result and the tuned result are reported.
+
+**Augmentation.** Horizontal flips, JPEG re-compression (quality 60 to 100), and small
+brightness and contrast changes. Videos shared online are re-encoded, so the model should not
+depend on compression detail. There are no crops or rotations, which would move the face edges.
+
+## Running it
+
+Python 3.10 or newer.
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/deepfake-detection.git
-cd deepfake-detection
-
-# Install dependencies
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
-### Run Detection
+Download DFDC (the 400-clip sample from the Kaggle competition is enough to start) and point
+`data.videos_dirs` in `configs/default.yaml` at the folder that holds `metadata.json`. Several
+folders can be listed, one per DFDC part.
 
 ```bash
-# Train the model
-python src/train.py
-
-# Run prediction on an image
-python src/predict.py --input path/to/image.jpg
+python -m deepfake_detector.extract  --config configs/default.yaml   # split + face crops
+python -m deepfake_detector.train    --config configs/default.yaml   # writes runs/.../model.keras
+python -m deepfake_detector.evaluate --config configs/default.yaml   # metrics.json, report.md, plots
+python -m deepfake_detector.predict  --model runs/efficientnet_b0/model.keras some_clip.mp4
 ```
 
----
+Extraction can be stopped and started again; videos that are already done are skipped.
+Training on a GPU takes a few minutes for the sample. Without a GPU, use the Kaggle notebook.
 
-## 🔬 How It Works
+**Kaggle.** `notebooks/02_train_on_kaggle.ipynb` runs all of the above on a free Kaggle GPU with
+the competition data attached, and zips the model and the results for download.
 
-```
-Input Image / Video
-       │
-       ▼
- MTCNN Face Detection
-       │
-       ▼
- Face Cropping & Preprocessing
-       │
-       ▼
- Data Augmentation
-       │
-       ▼
- CNN Classification Model
-       │
-       ▼
- Output: REAL or FAKE ✅ / ❌
+**Web demo.** `app/app.py` is a Gradio app: upload a clip and it shows the verdict and every face
+it scored, with the score for each frame.
+
+```bash
+pip install -e ".[app]"
+MODEL_PATH=runs/efficientnet_b0/model.keras python app/app.py
 ```
 
----
+## Tests
 
-## 📊 Results
+```bash
+pytest
+```
 
-| Metric | Score |
-|--------|-------|
-| Accuracy | High |
-| Precision | High |
-| Validation Loss | Low |
+The tests build a miniature DFDC folder of synthetic clips and run extraction, training,
+evaluation and prediction end to end with a stand-in face detector, plus unit tests for the
+split, frame sampling, cropping and metrics. They run on every push (`.github/workflows/tests.yml`).
 
-> Detailed metrics and confusion matrix available in `notebooks/analysis.ipynb`
+## Project layout
 
----
+```
+configs/                 default.yaml for local runs, kaggle.yaml for the notebook
+src/deepfake_detector/
+  metadata.py            DFDC metadata, split by source video
+  faces.py               frame sampling, MTCNN, face crops
+  extract.py             step 1: split and save crops, resumable
+  dataset.py             tf.data pipeline, augmentation, class weights
+  model.py               EfficientNet-B0 head, two-stage unfreezing
+  train.py               step 2
+  metrics.py             frame and video scores, threshold choice
+  evaluate.py            step 3: metrics, report, plots
+  predict.py             score one video from the command line or from code
+app/app.py               Gradio demo
+notebooks/               original exploration, Kaggle training run
+tests/
+```
 
-## 🎓 Project Context
+## Limitations
 
-This project was developed as a **Graduation Project** at the **Egyptian Russian University**, Faculty of Artificial Intelligence — demonstrating practical application of deep learning in media forensics.
+- Only the largest face in a frame is scored. In DFDC clips with two people, sometimes only one
+  face is swapped, and if it is the smaller one the clip can be missed.
+- The model sees single frames, so it cannot use flicker or unnatural motion between frames.
+- DFDC actors were recorded for the dataset. Faces in the wild, other face-swap methods and
+  heavy filters will lower accuracy; treat the scores as a screening signal, not proof.
 
----
+## License
 
-## 🙋‍♂️ Author
-
-**Marwan Ashraf**
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue?logo=linkedin)](https://www.linkedin.com/in/marwan-ashraf-811660219/)
-[![GitHub](https://img.shields.io/badge/GitHub-Follow-black?logo=github)](https://www.linkedin.com/in/marwan-ashraf-811660219/)
-
+MIT

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepfake-detector"
+version = "2.0.0"
+description = "Deepfake video detection on DFDC: MTCNN face crops scored by a fine-tuned EfficientNet-B0"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Marwan Ashraf Khater" }]
+dependencies = [
+    "tensorflow>=2.16",
+    "mtcnn>=1.0",
+    "opencv-python-headless>=4.8",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+app = ["gradio>=4.44"]
+
+[project.scripts]
+deepfake-extract = "deepfake_detector.extract:main"
+deepfake-train = "deepfake_detector.train:main"
+deepfake-evaluate = "deepfake_detector.evaluate:main"
+deepfake-predict = "deepfake_detector.predict:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]

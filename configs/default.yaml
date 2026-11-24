@@ -1,0 +1,28 @@
+# Paths are relative to where you run the commands.
+
+data:
+  videos_dirs:
+    - data/train_sample_videos      # each folder needs its DFDC metadata.json
+  faces_dir: data/faces
+  frames_per_video: 16
+  face_margin: 0.25                 # extra context around the face, as a share of the box size
+  min_face_confidence: 0.90
+  image_size: 224
+
+split:
+  val_fraction: 0.15
+  test_fraction: 0.15
+  seed: 42
+
+train:
+  batch_size: 32
+  epochs_head: 3                    # backbone frozen, only the new head learns
+  epochs_finetune: 10               # last EfficientNet blocks unfrozen
+  lr_head: 0.001
+  lr_finetune: 0.0001
+  unfreeze_from: block6a_expand_conv
+  dropout: 0.3
+  weights: imagenet
+  patience: 3
+
+run_dir: runs/efficientnet_b0
